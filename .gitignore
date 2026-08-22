@@ -1,0 +1,21 @@
+# Real machine config with API keys and personal coordinates (do not commit)
+config.json
+
+# Runtime state and logs
+state.json
+hisashi.log
+*.log
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment and IDE
+.env
+.venv
+env/
+venv/
+.vscode/
+.idea/
+.DS_Store

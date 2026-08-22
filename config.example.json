@@ -1,0 +1,35 @@
+{
+  "location": {
+    "latitude": 35.6812,
+    "longitude": 139.7671,
+    "comment": "Tokyo Station (35.6812, 139.7671)"
+  },
+  "yolp": {
+    "appid": "YOUR_YOLP_APPID_HERE",
+    "rain_threshold_now": 0.0,
+    "rain_threshold_forecast": 0.0,
+    "forecast_lookahead_minutes": 30
+  },
+  "schedule": {
+    "mode": "sun_relative",
+    "sunrise_offset_minutes": 60,
+    "sunset_offset_minutes": -60,
+    "earliest_open_time": null,
+    "latest_close_time": null,
+    "fixed_open_time": null,
+    "fixed_close_time": null
+  },
+  "hardware": {
+    "python_bin": "/usr/bin/python3",
+    "script_path": "/home/koty/hisashi/somfy_fifo.py",
+    "device_ids": [1, 2],
+    "mod": "FSK",
+    "sweep": true,
+    "device_interval_seconds": 2.0
+  },
+  "daemon": {
+    "weather_check_interval_seconds": 300,
+    "loop_interval_seconds": 30,
+    "reopen_after_rain": false
+  }
+}
