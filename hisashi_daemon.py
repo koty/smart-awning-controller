@@ -166,11 +166,11 @@ class HisashiScheduler:
                         if ok:
                             self.daily_opened = True
 
-        # 2. クローズ判定 (now >= close_time または now < open_dt (夜間・未明))
+        # 2. クローズ判定 (now >= close_time)
         if now_dt >= close_dt:
-            if not self.daily_closed and curr_pos != "CLOSED":
-                logger.info(f"Scheduled CLOSE time reached ({close_dt.strftime('%H:%M:%S')}). Closing hisashi.")
-                ok = hisashi_ctl.close_hisashi(reason="SCHEDULE_CLOSE", is_rain=False, dry_run=self.dry_run)
+            if not self.daily_closed:
+                logger.info(f"Scheduled CLOSE time reached ({close_dt.strftime('%H:%M:%S')}). Closing hisashi (force send to ensure closed state).")
+                ok = hisashi_ctl.close_hisashi(reason="SCHEDULE_CLOSE", is_rain=False, force=True, dry_run=self.dry_run)
                 if ok:
                     self.daily_closed = True
 
