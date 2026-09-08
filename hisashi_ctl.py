@@ -216,6 +216,7 @@ def get_status_info() -> Dict[str, Any]:
         "schedule": sched,
         "weather": {
             "rain_risk": is_risk,
+            "error": weather_data.get("error", False),
             "reason": rain_reason,
             "provider": weather_data.get("provider"),
             "current_rain_mm": weather_data.get("current_rain_mm"),

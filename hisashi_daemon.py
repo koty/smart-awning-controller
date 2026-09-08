@@ -68,12 +68,22 @@ class HisashiScheduler:
         self.daily_opened = False
         self.daily_closed = False
         self.tz = timezone(timedelta(hours=9.0))
+        self._last_skip_msg = None
+        self._last_skip_time = 0
 
     def reload_config(self):
         try:
             self.config = hisashi_ctl.load_config()
         except Exception as e:
             logger.error(f"Failed to reload config: {e}")
+
+    def _log_schedule_skip(self, msg: str, throttle_seconds: float = 300.0):
+        """同一メッセージのログ連打を抑制します（デフォルト5分間隔）。"""
+        now_ts = time.time()
+        if msg != self._last_skip_msg or (now_ts - self._last_skip_time) >= throttle_seconds:
+            logger.warning(msg)
+            self._last_skip_msg = msg
+            self._last_skip_time = now_ts
 
     def update_daily_schedule_if_needed(self, now_dt: datetime):
         today = now_dt.date()
@@ -110,6 +120,12 @@ class HisashiScheduler:
         state = hisashi_ctl.load_state()
 
         is_risk, reason, wdata = weather_checker.check_rain_risk(self.config)
+
+        if wdata.get("error") or is_risk is None:
+            # フェイルセーフ: 天候取得エラー時は雨止み判定（reopen）も雨検知もスキップ
+            logger.warning(f"[Weather Check] Weather data unavailable: {reason}")
+            return
+
         logger.info(f"[Weather Check] Risk: {is_risk} | {reason} | Provider: {wdata.get('provider')}")
 
         if is_risk:
@@ -154,12 +170,19 @@ class HisashiScheduler:
         if open_dt <= now_dt < close_dt:
             if not self.daily_opened and curr_pos != "OPEN":
                 if rain_locked:
-                    logger.warning("Schedule open time reached, but rain_locked is active. Skipping open.")
+                    self._log_schedule_skip("Schedule open time reached, but rain_locked is active. Skipping open.")
                 else:
                     # オープン前に念のため雨雲チェック
-                    is_risk, reason, _ = weather_checker.check_rain_risk(self.config)
-                    if is_risk:
-                        logger.warning(f"Schedule open time reached, but rain risk detected ({reason}). Will not open.")
+                    is_risk, reason, wdata = weather_checker.check_rain_risk(self.config)
+                    if wdata.get("error") or is_risk is None:
+                        # フェイルセーフ: 天気データが取得できない場合は安全確認が取れないため開かない
+                        self._log_schedule_skip(f"Schedule open time reached, but weather check failed ({reason}). Skipping open for safety.")
+                    elif is_risk:
+                        self._log_schedule_skip(f"Schedule open time reached, but rain risk detected ({reason}). Will not open.")
+                        if not state.get("rain_locked"):
+                            state["rain_locked"] = True
+                            state["last_rain_time"] = datetime.now().isoformat()
+                            hisashi_ctl.save_state(state)
                     else:
                         logger.info(f"Scheduled OPEN time reached ({open_dt.strftime('%H:%M:%S')}). Opening hisashi.")
                         ok = hisashi_ctl.open_hisashi(reason="SCHEDULE_OPEN", dry_run=self.dry_run)

@@ -9,10 +9,37 @@ import urllib.parse
 import json
 import logging
 import os
+import time
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Tuple, Optional
 
 logger = logging.getLogger("hisashi.weather")
+
+
+def fetch_json_with_retry(url: str, headers: Optional[Dict[str, str]] = None, timeout: float = 10.0, max_retries: int = 3, retry_delay: float = 2.0) -> Dict[str, Any]:
+    """
+    指定URLからJSONを取得します。一時的な通信エラーや名前解決エラー時はリトライします。
+    """
+    req_headers = {"User-Agent": "HisashiAutomator/1.0"}
+    if headers:
+        req_headers.update(headers)
+    req = urllib.request.Request(url, headers=req_headers)
+
+    last_error: Optional[Exception] = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries:
+                logger.warning(f"HTTP request failed (attempt {attempt}/{max_retries}) for {url.split('?')[0]}: {e}. Retrying in {retry_delay:.1f}s...")
+                time.sleep(retry_delay)
+            else:
+                logger.error(f"HTTP request failed after {max_retries} attempts for {url.split('?')[0]}: {e}")
+                raise last_error
+
+    raise RuntimeError("Unexpected end of retry loop")
 
 
 def check_yolp_weather(lat: float, lon: float, appid: str, lookahead_minutes: int = 30) -> Dict[str, Any]:
@@ -22,13 +49,7 @@ def check_yolp_weather(lat: float, lon: float, appid: str, lookahead_minutes: in
     coords = f"{lon},{lat}"
     url = f"https://map.yahooapis.jp/weather/V1/place?coordinates={coords}&appid={appid}&output=json"
 
-    req = urllib.request.Request(
-        url,
-        headers={"User-Agent": "HisashiAutomator/1.0"}
-    )
-
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
+    data = fetch_json_with_retry(url, timeout=10.0, max_retries=3, retry_delay=2.0)
 
     features = data.get("Feature", [])
     if not features:
@@ -64,7 +85,8 @@ def check_yolp_weather(lat: float, lon: float, appid: str, lookahead_minutes: in
         "current_rain_mm": current_rain,
         "max_forecast_rain_mm": max_forecast_rain,
         "lookahead_minutes": lookahead_minutes,
-        "details": weather_list
+        "details": weather_list,
+        "error": False
     }
 
 
@@ -73,10 +95,7 @@ def check_open_meteo_weather(lat: float, lon: float, lookahead_minutes: int = 30
     Open-Meteo API (無料・キー不要) の降水情報をフォールバックとして取得します。
     """
     url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=precipitation,rain,showers&hourly=precipitation&timezone=Asia%2FTokyo"
-    req = urllib.request.Request(url, headers={"User-Agent": "HisashiAutomator/1.0"})
-
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
+    data = fetch_json_with_retry(url, timeout=10.0, max_retries=3, retry_delay=2.0)
 
     current_rain = float(data.get("current", {}).get("precipitation", 0.0))
     # hourly precipitation (next 1-2 hours)
@@ -91,15 +110,20 @@ def check_open_meteo_weather(lat: float, lon: float, lookahead_minutes: int = 30
         "current_rain_mm": current_rain,
         "max_forecast_rain_mm": float(max_forecast_rain),
         "lookahead_minutes": lookahead_minutes,
-        "details": []
+        "details": [],
+        "error": False
     }
 
 
-def check_rain_risk(config: Dict[str, Any]) -> Tuple[bool, str, Dict[str, Any]]:
+def check_rain_risk(config: Dict[str, Any]) -> Tuple[Optional[bool], str, Dict[str, Any]]:
     """
     設定に基づいて雨のリスク（雨が降っている、または雨雲が近づいているか）を判定します。
 
     :return: (is_rain_risk, reason_text, raw_data)
+             is_rain_risk:
+               - True: 雨リスクあり (降雨検知または雨雲接近)
+               - False: 安全 (降雨なし確認済み)
+               - None: 判定不能 (API通信エラー等のため安全確認不可)
     """
     loc = config.get("location", {})
     lat = loc.get("latitude", 35.6895)
@@ -111,18 +135,29 @@ def check_rain_risk(config: Dict[str, Any]) -> Tuple[bool, str, Dict[str, Any]]:
     thresh_forecast = yolp_cfg.get("rain_threshold_forecast", 0.0)
 
     res = None
+    errors = []
     if appid:
         try:
             res = check_yolp_weather(lat, lon, appid, lookahead)
         except Exception as e:
+            errors.append(f"YOLP: {e}")
             logger.warning(f"YOLP weather API failed: {e}. Falling back to Open-Meteo.")
 
     if res is None:
         try:
             res = check_open_meteo_weather(lat, lon, lookahead)
         except Exception as e:
+            errors.append(f"Open-Meteo: {e}")
+            err_details = "; ".join(errors)
             logger.error(f"Open-Meteo weather API also failed: {e}")
-            return False, f"Weather check failed: {e}", {}
+            # フェイルセーフ: 安全確認が取れないため is_risk に None を返す
+            return None, f"Weather check failed ({err_details})", {
+                "provider": None,
+                "current_rain_mm": 0.0,
+                "max_forecast_rain_mm": 0.0,
+                "error": True,
+                "error_details": err_details
+            }
 
     cur_rain = res["current_rain_mm"]
     fore_rain = res["max_forecast_rain_mm"]
